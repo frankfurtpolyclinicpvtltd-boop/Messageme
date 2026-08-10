@@ -116,6 +116,12 @@
   .empty-state { color: var(--text-dim); font-size: 13px; padding: 20px; text-align: center; }
   .tick { font-size: 11px; margin-left: 4px; opacity: .65; }
   .tick.seen { opacity: 1; color: var(--accent); }
+  .seen-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 14px; height: 14px; border-radius: 50%; background: #22c55e;
+    color: #fff; font-size: 9px; font-weight: 700; margin-left: 4px;
+    vertical-align: middle;
+  }
 </style>
 </head>
 <body>
@@ -270,6 +276,7 @@
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     isPolling = false;
     pendingTicks.clear();
+    PARTNER_USER = null;
 
     await checkAuth();
     if (myToken !== routeToken) return; // a newer route() call has since started — abandon this one
@@ -371,9 +378,20 @@
 
   /* ---------- chat: message rendering + polling ---------- */
   let lastId = 0;
-  let pendingTicks = new Map(); // message id -> tick <span> element, for own sent messages not yet confirmed seen
+  let PARTNER_USER = null;      // learned from the first message we see from the other person
+  let pendingTicks = new Map(); // message id -> { tickEl, metaEl }, for own sent messages not yet confirmed seen
+
+  function makeSeenBadge() {
+    const badge = document.createElement("span");
+    badge.className = "seen-badge";
+    badge.textContent = PARTNER_USER ? PARTNER_USER.charAt(0).toUpperCase() : "•";
+    badge.title = PARTNER_USER ? "Seen by " + PARTNER_USER : "Seen";
+    return badge;
+  }
 
   function renderMessage(m) {
+    if (m.sender !== CURRENT_USER) PARTNER_USER = m.sender;
+
     const wrap = document.createElement("div");
     wrap.className = "msg-row " + (m.sender === CURRENT_USER ? "me" : "them");
     const bubble = document.createElement("div");
@@ -405,13 +423,18 @@
     meta.textContent = metaText;
     bubble.appendChild(meta);
 
-    // Small "seen" tick — only on my own, non-deleted messages.
+    // Ticks + green "seen by" badge — only on my own, non-deleted messages.
     if (m.sender === CURRENT_USER && !m.deleted) {
       const tick = document.createElement("span");
       tick.className = "tick" + (m.seen ? " seen" : "");
       tick.textContent = m.seen ? "✓✓" : "✓";
       meta.appendChild(tick);
-      if (!m.seen) pendingTicks.set(m.id, tick);
+
+      if (m.seen) {
+        meta.appendChild(makeSeenBadge());
+      } else {
+        pendingTicks.set(m.id, { tickEl: tick, metaEl: meta });
+      }
     }
 
     wrap.appendChild(bubble);
@@ -427,10 +450,11 @@
       for (const idStr of Object.keys(data.seen || {})) {
         if (!data.seen[idStr]) continue;
         const id = Number(idStr);
-        const tick = pendingTicks.get(id);
-        if (tick) {
-          tick.textContent = "✓✓";
-          tick.classList.add("seen");
+        const entry = pendingTicks.get(id);
+        if (entry) {
+          entry.tickEl.textContent = "✓✓";
+          entry.tickEl.classList.add("seen");
+          entry.metaEl.appendChild(makeSeenBadge());
           pendingTicks.delete(id);
         }
       }
