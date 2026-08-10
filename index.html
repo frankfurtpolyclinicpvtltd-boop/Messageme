@@ -401,7 +401,7 @@
     const meta = document.createElement("div");
     meta.className = "meta";
     let metaText = formatTime(m.created_at);
-    if (m.edited && !m.deleted) metaText += " · (edited)";
+    if (m.edited && !m.deleted) metaText += "";
     meta.textContent = metaText;
     bubble.appendChild(meta);
 
