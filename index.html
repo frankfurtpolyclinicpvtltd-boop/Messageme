@@ -276,6 +276,8 @@
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     isPolling = false;
     pendingTicks.clear();
+    renderedBubbles.clear();
+    lastUpdateCheck = "";
     PARTNER_USER = null;
 
     await checkAuth();
@@ -378,8 +380,10 @@
 
   /* ---------- chat: message rendering + polling ---------- */
   let lastId = 0;
+  let lastUpdateCheck = "";     // ISO timestamp watermark for the live edit/delete sync
   let PARTNER_USER = null;      // learned from the first message we see from the other person
   let pendingTicks = new Map(); // message id -> { tickEl, metaEl }, for own sent messages not yet confirmed seen
+  let renderedBubbles = new Map(); // message id -> bubble <div>, so live updates can find it
 
   function makeSeenBadge() {
     const badge = document.createElement("span");
@@ -389,18 +393,19 @@
     return badge;
   }
 
-  function renderMessage(m) {
-    if (m.sender !== CURRENT_USER) PARTNER_USER = m.sender;
-
-    const wrap = document.createElement("div");
-    wrap.className = "msg-row " + (m.sender === CURRENT_USER ? "me" : "them");
-    const bubble = document.createElement("div");
-    bubble.className = "bubble";
+  // Fills (or refills) a bubble element from a message object. Shared by the
+  // initial render and by live edit/delete updates, so both stay in sync.
+  function populateBubble(bubble, m) {
+    bubble.innerHTML = "";
+    bubble.classList.remove("system-note");
 
     if (m.deleted) {
       bubble.classList.add("system-note");
       bubble.textContent = "This message was deleted by admin.";
-    } else if (m.type === "text") {
+      return;
+    }
+
+    if (m.type === "text") {
       const p = document.createElement("div");
       p.textContent = m.content;
       bubble.appendChild(p);
@@ -419,12 +424,12 @@
     const meta = document.createElement("div");
     meta.className = "meta";
     let metaText = formatTime(m.created_at);
-    if (m.edited && !m.deleted) metaText += "";
+    if (m.edited) metaText += " · (edited)";
     meta.textContent = metaText;
     bubble.appendChild(meta);
 
     // Ticks + green "seen by" badge — only on my own, non-deleted messages.
-    if (m.sender === CURRENT_USER && !m.deleted) {
+    if (m.sender === CURRENT_USER) {
       const tick = document.createElement("span");
       tick.className = "tick" + (m.seen ? " seen" : "");
       tick.textContent = m.seen ? "✓✓" : "✓";
@@ -436,8 +441,19 @@
         pendingTicks.set(m.id, { tickEl: tick, metaEl: meta });
       }
     }
+  }
 
+  function renderMessage(m) {
+    if (m.sender !== CURRENT_USER) PARTNER_USER = m.sender;
+
+    const wrap = document.createElement("div");
+    wrap.className = "msg-row " + (m.sender === CURRENT_USER ? "me" : "them");
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    populateBubble(bubble, m);
     wrap.appendChild(bubble);
+
+    renderedBubbles.set(m.id, bubble);
     return wrap;
   }
 
@@ -461,6 +477,21 @@
     } catch (e) { /* silent - retry next tick */ }
   }
 
+  // Picks up admin edits/deletes made to messages already on screen, so the
+  // OTHER person's tab reflects them immediately instead of waiting for a
+  // full page reload.
+  async function pollUpdates() {
+    try {
+      const res = await api("/api/messages/updates?since=" + encodeURIComponent(lastUpdateCheck));
+      const data = await res.json();
+      for (const m of data.messages) {
+        const bubble = renderedBubbles.get(m.id);
+        if (bubble) populateBubble(bubble, m);
+      }
+      if (data.latest) lastUpdateCheck = data.latest;
+    } catch (e) { /* silent - retry next tick */ }
+  }
+
   async function pollMessages() {
     if (isPolling) return;   // a previous poll is still in flight - don't overlap
     isPolling = true;
@@ -476,10 +507,11 @@
       }
       if (data.messages.length && wasAtBottom) container.scrollTop = container.scrollHeight;
 
-      // Mark anything the other person sent as seen by me, then refresh my
-      // own sent messages' tick state.
+      // Mark anything the other person sent as seen by me, refresh my own
+      // sent messages' tick state, and pick up any edits/deletes.
       await api("/api/messages/seen", { method: "POST" });
       await refreshPendingTicks();
+      await pollUpdates();
     } catch (e) { /* silent - retry next tick */ }
     finally { isPolling = false; }
   }
