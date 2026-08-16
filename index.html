@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Chat with me</title>
+<title>Private Chat</title>
 <style>
   :root {
     --bg: #0f1115;
@@ -102,7 +102,7 @@
 
   /* ---------- Admin ---------- */
   .admin-wrap { max-width: 900px; margin: 0 auto; padding: 20px 16px 60px; overflow-y: auto; height: 100%; }
-  .admin-wrap h2 { font-size: 16px; margin: 26px 0 10px; }
+  .admin-wrap h2 { font-size: 16px; margin: 26px 0 10px; display: flex; align-items: center; }
   table.admin-table { width: 100%; border-collapse: collapse; font-size: 13px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
   table.admin-table th, table.admin-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
   table.admin-table th { color: var(--text-dim); font-weight: 600; font-size: 11px; text-transform: uppercase; }
@@ -122,6 +122,13 @@
     color: #fff; font-size: 9px; font-weight: 700; margin-left: 4px;
     vertical-align: middle;
   }
+  .reset-all-btn {
+    font-size: 11px; padding: 5px 10px; border-radius: 7px;
+    border: 1px solid rgba(255,91,110,.4); background: var(--panel-2);
+    color: var(--danger); margin-left: 10px; vertical-align: middle;
+  }
+  .reset-all-btn:hover { background: rgba(255,91,110,.12); }
+  .reset-all-btn:disabled { opacity: .5; cursor: default; }
 </style>
 </head>
 <body>
@@ -130,7 +137,7 @@
 <div id="view-login" class="view">
   <div class="auth-wrap">
     <div class="auth-card">
-      <h1>Message Me</h1>
+      <h1>Private Chat</h1>
       <p class="sub">Sign in to continue.</p>
       <form id="login-form">
         <div class="field">
@@ -212,7 +219,10 @@
     </table>
     <div class="empty-state" id="events-empty" style="display:none;">No events logged yet.</div>
 
-    <h2>Message moderation</h2>
+    <h2>
+      Message moderation
+      <button class="reset-all-btn" id="reset-all-btn">Reset all messages</button>
+    </h2>
     <table class="admin-table" id="messages-table">
       <thead><tr><th>Time</th><th>Sender</th><th>Type</th><th>Content</th><th>Actions</th></tr></thead>
       <tbody id="messages-tbody"></tbody>
@@ -500,6 +510,24 @@
       if (res.status === 401) { location.hash = "#/"; route(); return; }
       const data = await res.json();
       const container = document.getElementById("messages");
+
+      // If the server-side message table was wiped (admin "reset all") while
+      // we already have bubbles on screen, since_id=0 would otherwise just
+      // silently return nothing new. Detect that and clear the view so this
+      // tab reflects the reset without waiting for a manual reload.
+      if (lastId > 0 && data.messages.length === 0) {
+        const res2 = await api("/api/messages?since_id=0");
+        if (res2.ok) {
+          const data2 = await res2.json();
+          if (data2.messages.length === 0) {
+            container.innerHTML = "";
+            renderedBubbles.clear();
+            pendingTicks.clear();
+            lastId = 0;
+          }
+        }
+      }
+
       const wasAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 60;
       for (const m of data.messages) {
         container.appendChild(renderMessage(m));
@@ -709,6 +737,33 @@
       body: JSON.stringify({ id })
     });
     if (res.ok) loadAdminMessages(); else alert("Delete failed.");
+  }
+
+  document.getElementById("reset-all-btn").addEventListener("click", resetAllMessages);
+
+  async function resetAllMessages() {
+    if (!confirm("This will permanently delete ALL messages and uploaded photos/voice notes for both users. This cannot be undone. Continue?")) return;
+
+    const btn = document.getElementById("reset-all-btn");
+    btn.disabled = true;
+    const originalLabel = btn.textContent;
+    btn.textContent = "Resetting…";
+
+    try {
+      const res = await api("/api/admin/messages/reset", { method: "POST" });
+      if (res.ok) {
+        loadAdminMessages();
+        alert("All messages have been cleared.");
+      } else {
+        const data = await res.json().catch(() => ({}));
+        alert("Reset failed: " + (data.error || res.status));
+      }
+    } catch (e) {
+      alert("Network error — could not reach the server.");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+    }
   }
 
   /* ---------- boot ---------- */
